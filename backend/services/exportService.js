@@ -185,6 +185,14 @@ function createXlsx(invoice) {
   ]);
 }
 
+
+function createXml(invoice) {
+  const f = normalizeInvoice(invoice);
+  const esc = (v) => escapeXml(String(v ?? ''));
+  const items = f.items.map((i) => `<item><descripcion>${esc(i.descripcion)}</descripcion><cantidad>${i.cantidad}</cantidad><precio_unitario>${i.precio_unitario}</precio_unitario><importe>${i.importe}</importe></item>`).join('');
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<factura><numero>${esc(f.numero_factura)}</numero><fecha_emision>${esc(f.fecha_emision)}</fecha_emision><moneda>${esc(f.moneda)}</moneda><emisor><nombre>${esc(f.emisor.nombre)}</nombre><identificacion>${esc(f.emisor.identificacion)}</identificacion><direccion>${esc(f.emisor.direccion)}</direccion></emisor><receptor><nombre>${esc(f.receptor.nombre)}</nombre><identificacion>${esc(f.receptor.identificacion)}</identificacion></receptor><items>${items}</items><subtotal>${f.subtotal}</subtotal><impuestos>${f.impuestos}</impuestos><total>${f.total}</total></factura>`;
+}
+
 function buildExport(invoice, format) {
   const f = normalizeInvoice(invoice);
   const base = `factura-${safeFilename(f.numero_factura || f.id)}`;
@@ -193,6 +201,7 @@ function buildExport(invoice, format) {
     case 'xlsx': case 'excel': return { buffer: createXlsx(invoice), contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', extension: 'xlsx', filename: `${base}.xlsx`, label: 'Descargar Excel' };
     case 'csv': return { buffer: Buffer.from('\ufeff' + createCsv(invoice), 'utf8'), contentType: 'text/csv; charset=utf-8', extension: 'csv', filename: `${base}.csv`, label: 'Descargar CSV' };
     case 'json': return { buffer: Buffer.from(JSON.stringify(f, null, 2), 'utf8'), contentType: 'application/json; charset=utf-8', extension: 'json', filename: `${base}.json`, label: 'Descargar JSON' };
+    case 'xml': return { buffer: Buffer.from(createXml(invoice), 'utf8'), contentType: 'application/xml; charset=utf-8', extension: 'xml', filename: `${base}.xml`, label: 'Descargar XML' };
     case 'txt': return { buffer: Buffer.from(createTxt(invoice), 'utf8'), contentType: 'text/plain; charset=utf-8', extension: 'txt', filename: `${base}.txt`, label: 'Descargar TXT' };
     case 'html': return { buffer: Buffer.from(createHtml(invoice), 'utf8'), contentType: 'text/html; charset=utf-8', extension: 'html', filename: `${base}.html`, label: 'Descargar HTML' };
     default: throw new Error('Formato de exportación no soportado.');

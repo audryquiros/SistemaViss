@@ -10,6 +10,7 @@ const FORMATOS = [
   { value: 'json', label: 'JSON', icon: '{}' },
   { value: 'html', label: 'HTML', icon: '</>' },
   { value: 'txt', label: 'TXT', icon: 'T' },
+  { value: 'xml', label: 'XML', icon: '<>' },
 ];
 
 function money(value, currency = 'CRC') {
@@ -47,7 +48,7 @@ async function descargarArchivo(download) {
 
 export default function CreateInvoice({ onNavigate }) {
   const [form, setForm] = useState({
-    numero_factura: '', fecha_emision: today(), moneda: 'CRC', taxRate: 13,
+    fecha_emision: today(), moneda: 'CRC', taxRate: 13,
     emisor: { nombre: '', nif_rfc: '', direccion: '' },
     receptor: { nombre: '', nif_rfc: '' },
     items: [emptyItem()],
@@ -71,8 +72,8 @@ export default function CreateInvoice({ onNavigate }) {
   async function crearFactura(e) {
     e.preventDefault();
     setError(''); setDownload(null); setCreated(null);
-    if (!form.numero_factura.trim() || !form.emisor.nombre.trim() || !form.receptor.nombre.trim()) {
-      setError('Completa el número de factura, emisor y receptor.');
+    if (!form.emisor.nombre.trim() || !form.receptor.nombre.trim()) {
+      setError('Completa el emisor y el receptor. El número de factura se asigna automáticamente.');
       return;
     }
     if (!form.items.some((item) => item.descripcion.trim() && Number(item.cantidad) > 0 && Number(item.precio_unitario) >= 0)) {
@@ -81,7 +82,6 @@ export default function CreateInvoice({ onNavigate }) {
     }
 
     const payload = {
-      numero_factura: form.numero_factura.trim(),
       fecha_emision: form.fecha_emision,
       moneda: form.moneda,
       emisor: form.emisor,
@@ -109,7 +109,7 @@ export default function CreateInvoice({ onNavigate }) {
       }
       if (!response.ok || !data.success) throw new Error(data.error || 'No se pudo crear la factura.');
       setCreated(data.data);
-      setDownload({ ...data.download, filename: `factura-${payload.numero_factura.replace(/[^a-zA-Z0-9_-]+/g, '_')}.${formato === 'excel' ? 'xls' : formato}` });
+      setDownload({ ...data.download, filename: `factura-${String(data.data?.numero_factura || data.data?.id).replace(/[^a-zA-Z0-9_-]+/g, '_')}.${formato === 'excel' ? 'xlsx' : formato}` });
     } catch (err) {
       setError(err.message || 'No se pudo crear la factura.');
     } finally { setLoading(false); }
@@ -122,7 +122,7 @@ export default function CreateInvoice({ onNavigate }) {
 
   function chooseFormat(value) {
     setFormato(value);
-    if (created) setDownload((prev) => prev ? { ...prev, format: value, label: `Descargar ${value === 'excel' ? 'Excel' : value.toUpperCase()}`, url: `/api/facturas/${created.id}/export/${value}`, filename: `factura-${String(created.numero_factura || created.id).replace(/[^a-zA-Z0-9_-]+/g, '_')}.${value === 'excel' ? 'xls' : value}` } : prev);
+    if (created) setDownload((prev) => prev ? { ...prev, format: value, label: `Descargar ${value === 'excel' ? 'Excel' : value.toUpperCase()}`, url: `/api/facturas/${created.id}/export/${value}`, filename: `factura-${String(created.numero_factura || created.id).replace(/[^a-zA-Z0-9_-]+/g, '_')}.${value === 'excel' ? 'xlsx' : value}` } : prev);
   }
 
   return (
@@ -140,7 +140,7 @@ export default function CreateInvoice({ onNavigate }) {
       <form className="create-layout" onSubmit={crearFactura}>
         <section className="create-form-card">
           <div className="create-section-head"><div><p className="eyebrow">INFORMACIÓN GENERAL</p><h2>Datos de la factura</h2></div><span className="create-chip">MySQL + IA</span></div>
-          <div className="form-grid three"><label>Número de factura<input value={form.numero_factura} onChange={(e) => update('numero_factura', e.target.value)} placeholder="FAC-2026-00126" /></label><label>Fecha de emisión<input type="date" value={form.fecha_emision} onChange={(e) => update('fecha_emision', e.target.value)} /></label><label>Moneda<select value={form.moneda} onChange={(e) => update('moneda', e.target.value)}><option value="CRC">CRC · Colones</option><option value="USD">USD · Dólares</option></select></label></div>
+          <div className="form-grid three"><label>Número de factura<input value="Se asignará automáticamente" readOnly disabled /></label><label>Fecha de emisión<input type="date" value={form.fecha_emision} onChange={(e) => update('fecha_emision', e.target.value)} /></label><label>Moneda<select value={form.moneda} onChange={(e) => update('moneda', e.target.value)}><option value="CRC">CRC · Colones</option><option value="USD">USD · Dólares</option></select></label></div>
 
           <div className="party-grid">
             <div className="party-card"><div className="party-title"><span>EMISOR</span><strong>Quién emite la factura</strong></div><label>Nombre<input value={form.emisor.nombre} onChange={(e) => updateParty('emisor', 'nombre', e.target.value)} placeholder="Tecnología Tica S.A." /></label><div className="form-grid two"><label>Identificación<input value={form.emisor.nif_rfc} onChange={(e) => updateParty('emisor', 'nif_rfc', e.target.value)} placeholder="3-101-456789" /></label><label>Dirección<input value={form.emisor.direccion} onChange={(e) => updateParty('emisor', 'direccion', e.target.value)} placeholder="San José, Costa Rica" /></label></div></div>
@@ -156,7 +156,7 @@ export default function CreateInvoice({ onNavigate }) {
         <aside className="create-side">
           <section className="format-card"><p className="eyebrow">FORMATO DE SALIDA</p><h2>¿Cómo quieres tu factura?</h2><p>Elige el documento que quieres generar. La factura se guarda primero y luego queda disponible para descargar.</p><div className="format-options">{FORMATOS.map((f) => <button type="button" key={f.value} className={formato === f.value ? 'selected' : ''} onClick={() => chooseFormat(f.value)}><span>{f.icon}</span><div><strong>{f.label}</strong><small>{f.value === 'pdf' ? 'Documento listo para imprimir' : f.value === 'excel' ? 'Hoja de cálculo' : `Archivo ${f.label}`}</small></div>{formato === f.value && <b>✓</b>}</button>)}</div><button className="generate-btn" type="submit" disabled={loading}>{loading ? <><span className="mini-spinner" /> Generando factura...</> : <>Crear factura <span>→</span></>}</button>{error && <div className="create-error"><b>!</b><span>{error}</span></div>}</section>
 
-          {created && <section className="created-card"><div className="created-check">✓</div><p className="eyebrow">FACTURA CREADA</p><h3>{created.numero_factura}</h3><p>La factura fue guardada correctamente en MySQL.</p><div className="created-total">{money(created.total, created.moneda)}</div><button type="button" className="download-created" onClick={downloadCurrent}>↓ Descargar {formato === 'excel' ? 'Excel' : formato.toUpperCase()}</button><div className="other-formats"><span>También puedes descargarla en:</span><div>{FORMATOS.filter((f) => f.value !== formato).map((f) => <button key={f.value} type="button" onClick={() => chooseFormat(f.value)}>{f.label}</button>)}</div></div></section>}
+          {created && <section className="created-card"><div className="created-check">✓</div><p className="eyebrow">FACTURA CREADA</p><h3>{created.numero_factura}</h3><p>La factura fue creada correctamente.</p><div className="created-total">{money(created.total, created.moneda)}</div><button type="button" className="download-created" onClick={downloadCurrent}>↓ Descargar {formato === 'excel' ? 'Excel' : formato.toUpperCase()}</button><div className="other-formats"><span>También puedes descargarla en:</span><div>{FORMATOS.filter((f) => f.value !== formato).map((f) => <button key={f.value} type="button" onClick={() => chooseFormat(f.value)}>{f.label}</button>)}</div></div></section>}
         </aside>
       </form>
     </div>

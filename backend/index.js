@@ -7,6 +7,7 @@ const { analizarFactura, ejecutarHerramientaGuardarFactura } = require('./servic
 const { getContext, rememberInvoice } = require('./memory/agentMemory');
 const { conversarConAgente } = require('./services/chatService');
 const { createPdfBuffer } = require('./services/invoicePdfService');
+const { buildExport } = require('./services/exportService');
 const { sequelize } = require('./models');
 
 const app = express();
@@ -187,8 +188,27 @@ app.post('/api/facturas/manual', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Debes enviar los datos de la factura.' });
     }
 
+    // El número se genera exclusivamente en backend. Nunca confiamos en un número enviado por el frontend.
+    const anio = Number(String(factura.fecha_emision || new Date().toISOString().slice(0, 10)).slice(0, 4)) || new Date().getFullYear();
+    const numeroAutomatico = await sequelize.transaction(async (transaction) => {
+      await sequelize.query(
+        'INSERT INTO secuencias_factura (anio, ultimo_numero) VALUES (?, 0) ON DUPLICATE KEY UPDATE ultimo_numero = ultimo_numero',
+        { replacements: [anio], transaction }
+      );
+      const [[seq]] = await sequelize.query(
+        'SELECT ultimo_numero FROM secuencias_factura WHERE anio = ? FOR UPDATE',
+        { replacements: [anio], transaction }
+      );
+      const siguiente = Number(seq?.ultimo_numero || 0) + 1;
+      await sequelize.query(
+        'UPDATE secuencias_factura SET ultimo_numero = ? WHERE anio = ?',
+        { replacements: [siguiente, anio], transaction }
+      );
+      return `FAC-${anio}-${String(siguiente).padStart(5, '0')}`;
+    });
+    const facturaSinNumero = { ...factura, numero_factura: numeroAutomatico };
     const resultado = await ejecutarHerramientaGuardarFactura({
-      factura,
+      factura: facturaSinNumero,
       nivel_detalle: 'manual',
     });
 
@@ -203,7 +223,7 @@ app.post('/api/facturas/manual', async (req, res) => {
 
     const plain = guardada.toJSON();
     const formato = String(req.body?.formato || 'pdf').toLowerCase();
-    const formatosPermitidos = ['pdf', 'excel', 'csv', 'json', 'html', 'txt'];
+    const formatosPermitidos = ['pdf', 'excel', 'csv', 'json', 'xml', 'html', 'txt'];
     if (!formatosPermitidos.includes(formato)) {
       return res.status(400).json({ success: false, error: 'Formato de factura no soportado.' });
     }
@@ -239,81 +259,14 @@ app.get('/api/facturas/:id/export/:format', async (req, res) => {
 
     const f = factura.toJSON();
     const format = String(req.params.format).toLowerCase();
-    const safeNumber = String(f.numero_factura || f.id).replace(/[^a-zA-Z0-9_-]/g, '_');
-
-    if (format === 'pdf') {
-      const buffer = createPdfBuffer(f);
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="factura-${safeNumber}.pdf"`);
-      return res.send(buffer);
+    try {
+      const file = buildExport(f, format);
+      res.setHeader('Content-Type', file.contentType);
+      res.setHeader('Content-Disposition', `attachment; filename="${file.filename}"`);
+      return res.send(file.buffer);
+    } catch (error) {
+      return res.status(400).json({ success: false, error: error.message || 'Formato no soportado.' });
     }
-
-    const money = (value) => Number(value || 0).toFixed(2);
-    const items = Array.isArray(f.items) ? f.items : [];
-
-    if (format === 'json') {
-      const body = JSON.stringify(f, null, 2);
-      res.setHeader('Content-Type', 'application/json; charset=utf-8');
-      res.setHeader('Content-Disposition', `attachment; filename="factura-${safeNumber}.json"`);
-      return res.send(body);
-    }
-
-    if (format === 'csv') {
-      const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-      const rows = [
-        ['Factura', 'Fecha', 'Emisor', 'Receptor', 'Moneda', 'Subtotal', 'Impuestos', 'Total'],
-        [f.numero_factura, f.fecha_emision, f.emisor_nombre, f.receptor_nombre, f.moneda, money(f.subtotal), money(f.impuestos), money(f.total)],
-        [],
-        ['Descripción', 'Cantidad', 'Precio unitario', 'Importe'],
-        ...items.map(i => [i.descripcion, i.cantidad, money(i.precio_unitario), money(i.importe)]),
-      ];
-      const body = rows.map(row => row.map(esc).join(',')).join('\r\n');
-      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-      res.setHeader('Content-Disposition', `attachment; filename="factura-${safeNumber}.csv"`);
-      return res.send('﻿' + body);
-    }
-
-    if (format === 'excel') {
-      // SpreadsheetML es un formato XML nativo de Excel y no requiere dependencias externas.
-      const esc = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-      const row = (cells) => `<Row>${cells.map(v => `<Cell><Data ss:Type="String">${esc(v)}</Data></Cell>`).join('')}</Row>`;
-      const xml = `<?xml version="1.0" encoding="UTF-8"?><?mso-application progid="Excel.Sheet"?>
-      <Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
-        <Worksheet ss:Name="Factura"><Table>
-          ${row(['Factura', f.numero_factura])}${row(['Fecha', f.fecha_emision])}${row(['Emisor', f.emisor_nombre])}${row(['Receptor', f.receptor_nombre])}${row(['Moneda', f.moneda])}${row(['Subtotal', money(f.subtotal)])}${row(['Impuestos', money(f.impuestos)])}${row(['Total', money(f.total)])}
-          ${row([])}${row(['Descripción', 'Cantidad', 'Precio unitario', 'Importe'])}
-          ${items.map(i => row([i.descripcion, i.cantidad, money(i.precio_unitario), money(i.importe)])).join('')}
-        </Table></Worksheet></Workbook>`;
-      res.setHeader('Content-Type', 'application/vnd.ms-excel; charset=utf-8');
-      res.setHeader('Content-Disposition', `attachment; filename="factura-${safeNumber}.xls"`);
-      return res.send(xml);
-    }
-
-    if (format === 'html') {
-      const body = `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Factura ${escHtml(f.numero_factura)}</title><style>body{font-family:Arial,sans-serif;max-width:900px;margin:40px auto;color:#172033}h1{margin-bottom:4px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.card{border:1px solid #ddd;padding:16px;border-radius:10px}table{width:100%;border-collapse:collapse;margin-top:24px}th,td{padding:10px;border-bottom:1px solid #ddd;text-align:left}.total{font-size:22px;font-weight:700}</style></head><body><h1>Factura ${escHtml(f.numero_factura)}</h1><p>${escHtml(f.fecha_emision)}</p><div class="grid"><div class="card"><b>Emisor</b><div>${escHtml(f.emisor_nombre)}</div><div>${escHtml(f.emisor_nif_rfc)}</div></div><div class="card"><b>Receptor</b><div>${escHtml(f.receptor_nombre)}</div><div>${escHtml(f.receptor_nif_rfc)}</div></div></div><table><thead><tr><th>Descripción</th><th>Cantidad</th><th>Precio</th><th>Importe</th></tr></thead><tbody>${items.map(i => `<tr><td>${escHtml(i.descripcion)}</td><td>${escHtml(i.cantidad)}</td><td>${money(i.precio_unitario)}</td><td>${money(i.importe)}</td></tr>`).join('')}</tbody></table><p>Subtotal: ${money(f.subtotal)} ${escHtml(f.moneda)}</p><p>Impuestos: ${money(f.impuestos)} ${escHtml(f.moneda)}</p><p class="total">Total: ${money(f.total)} ${escHtml(f.moneda)}</p></body></html>`;
-      res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      res.setHeader('Content-Disposition', `attachment; filename="factura-${safeNumber}.html"`);
-      return res.send(body);
-    }
-
-    if (format === 'txt') {
-      const lines = [
-        `FACTURA ${f.numero_factura || ''}`,
-        `Fecha: ${f.fecha_emision || ''}`,
-        `Emisor: ${f.emisor_nombre || ''}`,
-        `Receptor: ${f.receptor_nombre || ''}`,
-        '', 'DETALLE',
-        ...items.map(i => `${i.descripcion} | Cantidad: ${i.cantidad} | Precio: ${money(i.precio_unitario)} | Importe: ${money(i.importe)}`),
-        '', `Subtotal: ${money(f.subtotal)} ${f.moneda || ''}`,
-        `Impuestos: ${money(f.impuestos)} ${f.moneda || ''}`,
-        `Total: ${money(f.total)} ${f.moneda || ''}`,
-      ];
-      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-      res.setHeader('Content-Disposition', `attachment; filename="factura-${safeNumber}.txt"`);
-      return res.send(lines.join('\n'));
-    }
-
-    return res.status(400).json({ success: false, error: 'Formato no soportado. Usa pdf, excel, csv, json, html o txt.' });
   } catch (error) {
     console.error('Error exportando factura:', error);
     return res.status(500).json({ success: false, error: 'No se pudo generar el archivo.' });

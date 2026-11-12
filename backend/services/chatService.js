@@ -1,322 +1,196 @@
-const { Factura, FacturaItem } = require('../models');
-const { rememberChat } = require('../memory/agentMemory');
 require('dotenv').config();
+const { Op } = require('sequelize');
+const { Factura, FacturaItem } = require('../models');
+const { getSession, rememberChat, getContext } = require('../memory/agentMemory');
 
 const OPENAI_API_URL = 'https://api.openai.com/v1/responses';
-const DEFAULT_MODEL = process.env.OPENAI_CHAT_MODEL || process.env.OPENAI_VISION_MODEL || 'gpt-4o';
+const MODEL = process.env.OPENAI_TEXT_MODEL || process.env.OPENAI_CHAT_MODEL || process.env.OPENAI_VISION_MODEL || 'gpt-4o';
 
-function normalizarFormato(formato = '') {
-  const value = String(formato).toLowerCase();
-  if (value.includes('pdf')) return 'pdf';
-  if (value.includes('excel') || value.includes('xlsx') || value.includes('xls')) return 'excel';
-  if (value.includes('csv')) return 'csv';
-  if (value.includes('json')) return 'json';
-  if (value.includes('html')) return 'html';
-  if (value.includes('txt') || value.includes('texto')) return 'txt';
-  if (value.includes('tabla')) return 'tabla';
-  if (value.includes('detalle') || value.includes('detall')) return 'detalle';
-  if (value.includes('resumen')) return 'resumen';
-  return 'texto';
+function normalizarFormato(texto='') {
+  const v = String(texto).toLowerCase();
+  if (/\bpdf\b/.test(v)) return 'pdf';
+  if (/excel|xlsx|xls/.test(v)) return 'excel';
+  if (/\bcsv\b/.test(v)) return 'csv';
+  if (/\bjson\b/.test(v)) return 'json';
+  if (/\bxml\b/.test(v)) return 'xml';
+  if (/html/.test(v)) return 'html';
+  if (/txt|texto/.test(v)) return 'txt';
+  if (/tabla|tabular|listado/.test(v)) return 'tabla';
+  if (/detalle|detallada|completa/.test(v)) return 'detalle';
+  return 'resumen';
 }
 
-function esDescarga(solicitud = '') {
-  const value = String(solicitud).toLowerCase();
-  return /(descarg|export|archivo|documento|gener(a|á)r|dame.*en)/i.test(value) &&
-    /(pdf|excel|xlsx|xls|csv|json|html|txt|texto)/i.test(value);
+function esDescarga(texto='') {
+  const v=String(texto).toLowerCase();
+  return /(descarg|export|genera|generar|crea|crear|archivo|documento|pásame|pasame|dame)/i.test(v)
+    && /(pdf|excel|xlsx|xls|csv|json|xml|html|txt)/i.test(v);
 }
 
+function parseDate(value) {
+  if (!value) return null;
+  const d = new Date(`${value}T00:00:00`);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
 
-function crearRespuestaVisual(facturas, formato, solicitud = '') {
-  if (!facturas.length) {
-    return {
-      type: 'empty',
-      title: 'No encontré esa factura',
-      message: 'No hay facturas guardadas que coincidan con tu solicitud.',
-      data: [],
-    };
+function isoDate(d) { return d.toISOString().slice(0,10); }
+
+function rangoPeriodo(periodo='') {
+  const p=String(periodo).toLowerCase();
+  const hoy=new Date();
+  const fin=new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate());
+  if (/hoy/.test(p)) return { desde: isoDate(fin), hasta: isoDate(fin) };
+  if (/semana/.test(p)) {
+    const desde=new Date(fin); desde.setDate(fin.getDate()-6);
+    return { desde: isoDate(desde), hasta: isoDate(fin) };
   }
-
-  const primera = facturas[0];
-
-  if (['pdf', 'excel', 'csv', 'json', 'html', 'txt'].includes(formato) && esDescarga(solicitud)) {
-    if (facturas.length !== 1) {
-      return {
-        type: 'table',
-        title: 'Selecciona una factura',
-        message: `Encontré ${facturas.length} facturas. Para descargar una, indícame el número de factura.`,
-        data: facturas,
-      };
-    }
-    const nombres = { pdf: 'PDF', excel: 'Excel', csv: 'CSV', json: 'JSON', html: 'HTML', txt: 'TXT' };
-    return {
-      type: 'download',
-      title: `Factura ${primera.numero_factura || ''}`.trim(),
-      message: `Preparé la factura ${primera.numero_factura || ''} en formato ${nombres[formato]}.`,
-      data: [primera],
-      download: {
-        id: primera.id,
-        format: formato,
-        label: `Descargar ${nombres[formato]}`,
-        url: `/api/facturas/${primera.id}/export/${formato}`,
-      },
-    };
+  if (/último\s*mes|ultimo\s*mes/.test(p)) {
+    const desde=new Date(fin); desde.setDate(fin.getDate()-29);
+    return { desde: isoDate(desde), hasta: isoDate(fin) };
   }
-
-  if (formato === 'json') {
-    return {
-      type: 'json',
-      title: facturas.length === 1 ? `Factura ${primera.numero_factura || ''}`.trim() : 'Facturas encontradas',
-      message: `Encontré ${facturas.length} factura${facturas.length === 1 ? '' : 's'}.`,
-      data: facturas,
-    };
+  if (/mes\s*pasado|mes\s*anterior/.test(p)) {
+    const desde=new Date(fin.getFullYear(), fin.getMonth()-1, 1);
+    const hasta=new Date(fin.getFullYear(), fin.getMonth(), 0);
+    return { desde: isoDate(desde), hasta: isoDate(hasta) };
   }
-
-  if (formato === 'tabla') {
-    return {
-      type: 'table',
-      title: facturas.length === 1 ? `Factura ${primera.numero_factura || ''}`.trim() : 'Facturas encontradas',
-      message: `Encontré ${facturas.length} factura${facturas.length === 1 ? '' : 's'} para tu búsqueda.`,
-      data: facturas,
-    };
+  if (/este\s*mes/.test(p)) {
+    const desde=new Date(fin.getFullYear(), fin.getMonth(), 1);
+    return { desde: isoDate(desde), hasta: isoDate(fin) };
   }
-
-  if (formato === 'detalle') {
-    return {
-      type: 'invoice',
-      title: `Factura ${primera.numero_factura || 'sin número'}`,
-      message: 'Aquí tienes el detalle completo de la factura.',
-      data: [primera],
-    };
-  }
-
-  if (formato === 'resumen') {
-    return {
-      type: 'summary',
-      title: `Factura ${primera.numero_factura || 'sin número'}`,
-      message: `Encontré ${facturas.length} factura${facturas.length === 1 ? '' : 's'}. Te muestro un resumen de la más reciente.`,
-      data: [primera],
-    };
-  }
-
-  return {
-    type: 'text',
-    title: `Factura ${primera.numero_factura || 'sin número'}`,
-    message: `Encontré ${facturas.length} factura${facturas.length === 1 ? '' : 's'}.`,
-    data: facturas,
-  };
+  return null;
 }
 
 function facturaPublica(factura) {
-  const plain = factura.toJSON ? factura.toJSON() : factura;
+  const f=factura.toJSON ? factura.toJSON() : factura;
   return {
-    id: plain.id,
-    numero_factura: plain.numero_factura,
-    fecha_emision: plain.fecha_emision,
-    moneda: plain.moneda,
-    emisor: {
-      nombre: plain.emisor_nombre,
-      nif_rfc: plain.emisor_nif_rfc,
-      direccion: plain.emisor_direccion,
-    },
-    receptor: {
-      nombre: plain.receptor_nombre,
-      nif_rfc: plain.receptor_nif_rfc,
-    },
-    subtotal: plain.subtotal,
-    impuestos: plain.impuestos,
-    total: plain.total,
-    nivel_detalle: plain.nivel_detalle,
-    items: (plain.items || []).map((item) => ({
-      descripcion: item.descripcion,
-      cantidad: item.cantidad,
-      precio_unitario: item.precio_unitario,
-      importe: item.importe,
-    })),
+    id:f.id, numero_factura:f.numero_factura, fecha_emision:f.fecha_emision, moneda:f.moneda,
+    emisor:{nombre:f.emisor_nombre,nif_rfc:f.emisor_nif_rfc,direccion:f.emisor_direccion},
+    receptor:{nombre:f.receptor_nombre,nif_rfc:f.receptor_nif_rfc}, subtotal:Number(f.subtotal||0),
+    impuestos:Number(f.impuestos||0), total:Number(f.total||0), createdAt:f.createdAt,
+    items:(f.items||[]).map(i=>({descripcion:i.descripcion,cantidad:Number(i.cantidad||0),precio_unitario:Number(i.precio_unitario||0),importe:Number(i.importe||0)}))
   };
 }
 
-async function buscarFacturas({ numero_factura, emisor, limite = 5 } = {}) {
-  const where = {};
-  if (numero_factura) where.numero_factura = String(numero_factura).trim();
-  if (emisor) {
-    const { Op } = require('sequelize');
-    where.emisor_nombre = { [Op.like]: `%${String(emisor).trim()}%` };
+async function buscarFacturas(args={}) {
+  const where={};
+  if(args.numero_factura) where.numero_factura={ [Op.like]: `%${String(args.numero_factura).trim()}%` };
+  if(args.emisor) where.emisor_nombre={ [Op.like]: `%${String(args.emisor).trim()}%` };
+  if(args.receptor) where.receptor_nombre={ [Op.like]: `%${String(args.receptor).trim()}%` };
+  if(args.fecha_desde || args.fecha_hasta){
+    where.fecha_emision={};
+    if(args.fecha_desde) where.fecha_emision[Op.gte]=String(args.fecha_desde);
+    if(args.fecha_hasta) where.fecha_emision[Op.lte]=String(args.fecha_hasta);
   }
-
-  const facturas = await Factura.findAll({
-    where,
-    include: [{ model: FacturaItem, as: 'items' }],
-    order: [['createdAt', 'DESC']],
-    limit: Math.min(Math.max(Number(limite) || 5, 1), 10),
-  });
-
+  const facturas=await Factura.findAll({where,include:[{model:FacturaItem,as:'items'}],order:[['createdAt','DESC']],limit:Math.min(Math.max(Number(args.limite)||5,1),20)});
   return facturas.map(facturaPublica);
 }
 
-function construirHerramientas() {
+async function resumenFacturacion(args={}) {
+  const where={};
+  const rango=rangoPeriodo(args.periodo||'');
+  const desde=args.fecha_desde||rango?.desde;
+  const hasta=args.fecha_hasta||rango?.hasta;
+  if(args.emisor) where.emisor_nombre={ [Op.like]: `%${String(args.emisor).trim()}%` };
+  if(desde||hasta){
+    where.fecha_emision={};
+    if(desde) where.fecha_emision[Op.gte]=String(desde);
+    if(hasta) where.fecha_emision[Op.lte]=String(hasta);
+  }
+  const facturas=await Factura.findAll({where,attributes:['id','numero_factura','fecha_emision','moneda','subtotal','impuestos','total','emisor_nombre','receptor_nombre'],order:[['fecha_emision','DESC']]});
+  const totals={};
+  for(const f of facturas){
+    const moneda=f.moneda||'CRC';
+    if(!totals[moneda]) totals[moneda]={cantidad:0,subtotal:0,impuestos:0,total:0};
+    totals[moneda].cantidad++;
+    totals[moneda].subtotal+=Number(f.subtotal||0);
+    totals[moneda].impuestos+=Number(f.impuestos||0);
+    totals[moneda].total+=Number(f.total||0);
+  }
+  return {periodo:{desde:desde||null,hasta:hasta||null},cantidad:facturas.length,totales:totals,facturas:facturas.map(f=>facturaPublica(f))};
+}
+
+function tools(){
   return [
-    {
-      type: 'function',
-      name: 'buscar_facturas',
-      description:
-        'Consulta facturas guardadas en MySQL. Usa numero_factura cuando el usuario mencione una factura concreta. ' +
-        'Si solo indica un emisor, puedes buscar por emisor. Devuelve los datos necesarios para responder.',
-      parameters: {
-        type: 'object',
-        properties: {
-          numero_factura: { type: ['string', 'null'], description: 'Número exacto o parcial de la factura.' },
-          emisor: { type: ['string', 'null'], description: 'Nombre del emisor si fue mencionado.' },
-          limite: { type: ['integer', 'null'], description: 'Cantidad máxima de resultados.' },
-        },
-        required: ['numero_factura', 'emisor', 'limite'],
-        additionalProperties: false,
-      },
-    },
+    {type:'function',name:'buscar_facturas',description:'Busca facturas guardadas. Sirve para una factura concreta, varias facturas, por emisor, receptor o fechas. Interpreta números parciales.',parameters:{type:'object',properties:{numero_factura:{type:['string','null']},emisor:{type:['string','null']},receptor:{type:['string','null']},fecha_desde:{type:['string','null'],description:'YYYY-MM-DD'},fecha_hasta:{type:['string','null'],description:'YYYY-MM-DD'},limite:{type:['integer','null']}},required:['numero_factura','emisor','receptor','fecha_desde','fecha_hasta','limite'],additionalProperties:false}},
+    {type:'function',name:'resumen_facturacion',description:'Calcula cantidad, subtotal, impuestos y total de facturas. Úsala para preguntas como cuánto hemos gastado, cuánto facturamos, cuánto pagamos de impuestos, totales del último mes, este mes o una fecha.',parameters:{type:'object',properties:{periodo:{type:['string','null'],description:'hoy, esta semana, este mes, ultimo mes, mes pasado o rango'},fecha_desde:{type:['string','null'],description:'YYYY-MM-DD'},fecha_hasta:{type:['string','null'],description:'YYYY-MM-DD'},emisor:{type:['string','null']}},required:['periodo','fecha_desde','fecha_hasta','emisor'],additionalProperties:false}},
   ];
 }
 
-async function llamarOpenAI(input, tools = construirHerramientas()) {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error('Falta configurar OPENAI_API_KEY en el archivo .env');
+async function llamarOpenAI(input){
+  const key=process.env.OPENAI_API_KEY;
+  if(!key) throw new Error('Falta configurar OPENAI_API_KEY en backend/.env');
+  const r=await fetch(OPENAI_API_URL,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${key}`},body:JSON.stringify({model:MODEL,instructions:`Eres un agente experto en facturación. Entiende español natural, preguntas incompletas, referencias como "esa", "la anterior", "la última", números parciales y solicitudes de exportación. Decide qué herramienta usar según la intención. Para preguntas de totales, gastos, impuestos o cantidad usa resumen_facturacion. Para buscar facturas usa buscar_facturas. Nunca inventes datos. No describas herramientas internas. Si el usuario pide descargar/exportar, identifica el formato y la factura, pero la aplicación generará el archivo real.`,input,tools:tools(),tool_choice:'auto'})});
+  if(!r.ok) throw new Error(`Error de OpenAI (${r.status}): ${await r.text()}`);
+  return r.json();
+}
 
-  const response = await fetch(OPENAI_API_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: DEFAULT_MODEL,
-      instructions:
-        'Eres el asistente de SistemaVision. Ayudas a consultar facturas almacenadas en MySQL. ' +
-        'Nunca inventes datos. Si el usuario pide una factura concreta, usa buscar_facturas. ' +
-        'Si pide un formato, respétalo. Puede solicitar PDF, Excel, CSV, JSON, HTML o TXT para descargar la factura. ' +
-        'No expongas detalles internos de herramientas ni claves.',
-      input,
-      ...(tools.length ? { tools, tool_choice: 'auto' } : {}),
-    }),
-  });
+function toolCalls(response){return (response?.output||[]).filter(x=>x?.type==='function_call');}
+function texto(response){if(response?.output_text)return response.output_text.trim();return (response?.output||[]).flatMap(x=>x?.content||[]).filter(c=>c?.type==='output_text').map(c=>c.text).join('\n').trim();}
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Error de OpenAI (${response.status}): ${body}`);
+function extraerNumero(texto){
+  const m=String(texto).match(/FAC\s*[- ]?\s*(\d{4})\s*[- ]?\s*(\d{3,})/i);
+  if(m) return `FAC-${m[1]}-${m[2]}`;
+  const n=String(texto).match(/(?:factura|fact|n(?:ú|u)mero|#)\s*(\d{3,})/i);
+  return n ? n[1] : null;
+}
+
+function formatoSolicitado(texto){return normalizarFormato(texto);}
+
+function vistaBusqueda(facturas, formato, solicitud){
+  if(!facturas.length)return {type:'empty',title:'No encontré facturas',message:'No encontré facturas que coincidan con lo que pediste.',data:[]};
+  const primera=facturas[0];
+  if(esDescarga(solicitud) && ['pdf','excel','csv','json','xml','html','txt'].includes(formato)){
+    if(facturas.length!==1)return {type:'table',title:'Necesito una factura concreta',message:`Encontré ${facturas.length} facturas. Indícame cuál quieres descargar.`,data:facturas};
+    const label={pdf:'PDF',excel:'Excel',csv:'CSV',json:'JSON',xml:'XML',html:'HTML',txt:'TXT'}[formato];
+    return {type:'download',title:`Factura ${primera.numero_factura}`,message:`Preparé ${primera.numero_factura} en ${label}. El archivo contiene los datos guardados de la factura.`,data:[primera],download:{id:primera.id,format:formato,label:`Descargar ${label}`,url:`/api/facturas/${primera.id}/export/${formato}`,filename:`factura-${primera.numero_factura}.${formato==='excel'?'xlsx':formato}`}};
   }
-  return response.json();
+  if(formato==='json')return {type:'json',title:'Datos de la factura',message:`Encontré ${facturas.length} factura${facturas.length===1?'':'s'}.`,data:facturas};
+  if(formato==='tabla')return {type:'table',title:'Facturas encontradas',message:`Encontré ${facturas.length} factura${facturas.length===1?'':'s'}.`,data:facturas};
+  if(formato==='detalle')return {type:'invoice',title:`Factura ${primera.numero_factura}`,message:'Aquí tienes todos los datos y líneas de la factura.',data:[primera]};
+  return {type:'summary',title:`Factura ${primera.numero_factura}`,message:`Encontré ${facturas.length} factura${facturas.length===1?'':'s'}. Te muestro la más reciente.`,data:[primera]};
 }
 
-function extraerTexto(response) {
-  if (response?.output_text) return response.output_text;
-  return (response?.output || [])
-    .flatMap((item) => item?.content || [])
-    .filter((content) => content?.type === 'output_text')
-    .map((content) => content.text)
-    .join('\n');
+function vistaResumen(resumen, solicitud){
+  if(!resumen.cantidad)return {type:'summary_stats',title:'Sin facturas',message:'No encontré facturas dentro del periodo solicitado.',data:resumen};
+  const partes=Object.entries(resumen.totales).map(([moneda,t])=>`${t.cantidad} factura${t.cantidad===1?'':'s'} · total ${moneda} ${t.total.toLocaleString('es-CR',{minimumFractionDigits:2,maximumFractionDigits:2})} · impuestos ${moneda} ${t.impuestos.toLocaleString('es-CR',{minimumFractionDigits:2,maximumFractionDigits:2})}`);
+  return {type:'summary_stats',title:'Resumen de facturación',message:`${partes.join(' | ')}.`,data:resumen};
 }
 
-function extraerToolCalls(response) {
-  return (response?.output || []).filter(
-    (item) => item?.type === 'function_call' && item?.name === 'buscar_facturas'
-  );
-}
-
-async function conversarConAgente(sessionId, message, context = {}) {
-  const userMessage = String(message || '').trim();
-  if (!userMessage) throw new Error('Escribe una pregunta o solicitud para el asistente.');
-
-  rememberChat(sessionId, 'user', userMessage);
-
-  const input = [
-    {
-      role: 'user',
-      content: [
-        { type: 'input_text', text: userMessage },
-        {
-          type: 'input_text',
-          text: `Memoria reciente de la sesión: ${JSON.stringify(context)}`,
-        },
-      ],
-    },
-  ];
-
-  const firstResponse = await llamarOpenAI(input);
-  const toolCalls = extraerToolCalls(firstResponse);
-  let referencias = [];
-
-  if (toolCalls.length) {
-    const toolOutputs = [];
-    for (const call of toolCalls) {
-      let args;
-      try {
-        args = JSON.parse(call.arguments || '{}');
-      } catch {
-        args = {};
-      }
-      const facturas = await buscarFacturas(args);
-      referencias = [...referencias, ...facturas];
-      toolOutputs.push({
-        type: 'function_call_output',
-        call_id: call.call_id,
-        output: JSON.stringify(facturas),
-      });
+async function conversarConAgente(sessionId,message,context={}){
+  const user=String(message||'').trim(); if(!user)throw new Error('Escribe una pregunta o solicitud.');
+  const session=getSession(sessionId); rememberChat(sessionId,'user',user);
+  const history=session.messages.slice(-10).map(m=>({role:m.role,content:m.content}));
+  const input=[...history,{role:'user',content:user},{role:'user',content:`Contexto de sesión reciente: ${JSON.stringify(context)}`}];
+  const response=await llamarOpenAI(input);
+  const calls=toolCalls(response);
+  let vista=null;
+  for(const call of calls){
+    let args={}; try{args=JSON.parse(call.arguments||'{}')}catch{}
+    if(call.name==='buscar_facturas'){
+      let numero=args.numero_factura;
+      if(!numero) numero=extraerNumero(user);
+      if(numero && /^\d+$/.test(String(numero))) numero=numero;
+      const facturas=await buscarFacturas({...args,numero_factura:numero});
+      vista=vistaBusqueda(facturas,formatoSolicitado(user),user);
+    } else if(call.name==='resumen_facturacion'){
+      vista=vistaResumen(await resumenFacturacion(args),user);
     }
-
-    const formato = normalizarFormato(userMessage);
-    const vista = crearRespuestaVisual(referencias, formato, userMessage);
-
-    // El frontend recibe datos estructurados y decide cómo presentarlos.
-    // Así evitamos Markdown crudo y mantenemos una respuesta consistente.
-    rememberChat(sessionId, 'assistant', vista.message, {
-      referencias: referencias.map((f) => f.id),
-      responseType: vista.type,
-    });
-
-    return {
-      answer: vista.message,
-      type: vista.type,
-      title: vista.title,
-      message: vista.message,
-      data: vista.data,
-      referencias,
-      formato,
-      download: vista.download || null,
-    };
   }
-
-  // Si el modelo no activa la herramienta, resolvemos de forma determinista
-  // las solicitudes explícitas de exportación para no devolver un enlace ficticio.
-  const formatoDirecto = normalizarFormato(userMessage);
-  if (esDescarga(userMessage) && ['pdf', 'excel', 'csv', 'json', 'html', 'txt'].includes(formatoDirecto)) {
-    const match = userMessage.match(/(?:fac(?:tura)?(?:\s*(?:n(?:ú|u)mero|#)?)?\s*)?([A-Z]{2,6}[- ]?\d{3,})/i);
-    const numero = match?.[1]?.replace(/\s+/g, '-');
-    const facturasDirectas = await buscarFacturas({ numero_factura: numero, limite: 5 });
-    const vistaDirecta = crearRespuestaVisual(facturasDirectas, formatoDirecto, userMessage);
-    rememberChat(sessionId, 'assistant', vistaDirecta.message, {
-      referencias: facturasDirectas.map((f) => f.id),
-      responseType: vistaDirecta.type,
-    });
-    return {
-      answer: vistaDirecta.message,
-      type: vistaDirecta.type,
-      title: vistaDirecta.title,
-      message: vistaDirecta.message,
-      data: vistaDirecta.data,
-      referencias: facturasDirectas,
-      formato: formatoDirecto,
-      download: vistaDirecta.download || null,
-    };
+  // Fallback determinista para frases comunes si el modelo no llamó una herramienta.
+  const u=user.toLowerCase();
+  if(!vista && /(cu[aá]nto|total|gast|factur|impuesto|iva|sum(a|ar)|cu[aá]ntas)/.test(u)){
+    if(/cu[aá]ntas|cantidad/.test(u) || /gast|factur|impuesto|iva|total/.test(u)) vista=vistaResumen(await resumenFacturacion({periodo:/último|ultimo|pasado|anterior/.test(u)?'ultimo mes':/este mes/.test(u)?'este mes':''}),user);
   }
-
-  const answer = extraerTexto(firstResponse) || 'No pude generar una respuesta.';
-  rememberChat(sessionId, 'assistant', answer);
-  return {
-    answer,
-    type: 'text',
-    title: 'Asistente',
-    message: answer,
-    data: [],
-    referencias: [],
-    formato: formatoDirecto,
-  };
+  if(!vista && esDescarga(user)){
+    const numero=extraerNumero(user);
+    const found=await buscarFacturas({numero_factura:numero,limite:5});
+    vista=vistaBusqueda(found,formatoSolicitado(user),user);
+  }
+  if(!vista){
+    const answer=texto(response)||'Puedo ayudarte a buscar facturas, consultar totales, revisar detalles y preparar archivos. ¿Qué necesitas?';
+    rememberChat(sessionId,'assistant',answer); return {answer,type:'text',title:'Asistente',message:answer,data:[],referencias:[],memory:getContext(sessionId)};
+  }
+  rememberChat(sessionId,'assistant',vista.message,{metadata:{type:vista.type}});
+  return {...vista,answer:vista.message,referencias:vista.data||[],memory:getContext(sessionId)};
 }
 
-module.exports = { conversarConAgente, buscarFacturas, facturaPublica };
+module.exports={conversarConAgente,buscarFacturas,facturaPublica,resumenFacturacion};

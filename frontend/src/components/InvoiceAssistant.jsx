@@ -61,7 +61,7 @@ export default function InvoiceAssistant() {
     setMessages((prev) => [...prev, { role: 'user', content: message }]);
     setLoading(true);
     try {
-      const response = await fetch(`${API_URL}/api/agent/chat`, {
+      const response = await fetch(`${API_URL}/api/chat`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message, session_id: getSessionId() }),
       });
@@ -78,6 +78,8 @@ export default function InvoiceAssistant() {
     if (message.type === 'summary') return <InvoiceCard invoice={message.data?.[0]} />;
     if (message.type === 'table') return <TableResult data={message.data || []} />;
     if (message.type === 'json') return <pre className="ai-json">{JSON.stringify(message.data, null, 2)}</pre>;
+    if (message.type === 'download') return <><p className="ai-text">{message.message}</p><InvoiceCard invoice={message.data?.[0]} /><button className="ai-download" onClick={async () => { const r = await fetch(`${API_URL}${message.download.url}`); const b = await r.blob(); const u = URL.createObjectURL(b); const a = document.createElement('a'); a.href = u; a.download = message.download.filename || 'factura'; a.click(); URL.revokeObjectURL(u); }}>↓ {message.download.label}</button></>;
+    if (message.type === 'summary_stats') return <div className="ai-stats"><strong>{message.title}</strong><p>{message.message}</p>{Object.entries(message.data?.totales || {}).map(([currency, t]) => <div key={currency}><b>{currency}</b> · {t.cantidad} facturas · Total {Number(t.total).toLocaleString('es-CR',{minimumFractionDigits:2})} · Impuestos {Number(t.impuestos).toLocaleString('es-CR',{minimumFractionDigits:2})}</div>)}</div>;
     if (message.type === 'empty') return <div className="ai-empty">🔎 {message.message}</div>;
     if (message.type === 'error') return <div className="ai-error">⚠ {message.message}</div>;
     return <p className="ai-text">{message.message}</p>;
@@ -91,7 +93,7 @@ export default function InvoiceAssistant() {
       </div>
       <div className="assistant-shell">
         <div className="chat-history">
-          {messages.length === 0 && <div className="chat-welcome"><div className="ai-orb">✦</div><strong>¿Qué quieres consultar?</strong><span>La IA busca en MySQL y prepara la respuesta en un formato visual.</span><div className="quick-actions"><button onClick={() => sendMessage('Dame la última factura en resumen')}>Última factura</button><button onClick={() => sendMessage('Muéstrame la factura FAC-2026-00125 en tabla')}>Ver en tabla</button><button onClick={() => sendMessage('Dame la factura FAC-2026-00125 en JSON')}>Ver JSON</button></div></div>}
+          {messages.length === 0 && <div className="chat-welcome"><div className="ai-orb">✦</div><strong>¿Qué quieres consultar?</strong><span>Puedo buscar, resumir, comparar y preparar tus facturas en el formato que necesites.</span><div className="quick-actions"><button onClick={() => sendMessage('Dame la última factura en resumen')}>Última factura</button><button onClick={() => sendMessage('Muéstrame la factura FAC-2026-00125 en tabla')}>Ver en tabla</button><button onClick={() => sendMessage('Dame la factura FAC-2026-00125 en JSON')}>Ver JSON</button></div></div>}
           {messages.map((message, index) => <div key={index} className={`chat-message ${message.role}`}>{message.role === 'assistant' && <div className="assistant-avatar">✦</div>}<div className="bubble"><div className="bubble-title">{message.role === 'user' ? 'Tú' : message.title || 'SistemaVision'}</div>{message.role === 'assistant' ? renderMessage(message) : <p className="ai-text">{message.content}</p>}</div></div>)}
           {loading && <div className="chat-message assistant"><div className="assistant-avatar pulse-avatar">✦</div><div className="bubble typing"><span /><span /><span /><em>Buscando y preparando tu respuesta...</em></div></div>}
         </div>
