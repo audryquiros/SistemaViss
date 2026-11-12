@@ -6,7 +6,8 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node index.js",
-    "dev": "nodemon index.js"
+    "dev": "nodemon index.js",
+    "db:sync": "node -e \"require('./models').sequelize.sync().then(()=>{console.log('DB sincronizada');process.exit(0)}).catch(e=>{console.error(e);process.exit(1)})\""
   },
   "keywords": [],
   "author": "",

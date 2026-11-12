@@ -4,39 +4,34 @@ const multer = require('multer');
 require('dotenv').config();
 
 const { analizarFactura } = require('./services/agentServiceFacturas');
+const { getContext, rememberInvoice } = require('./memory/agentMemory');
+const { sequelize } = require('./models');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Configuración de middlewares
 app.use(cors());
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
-// Configurar multer en memoria para procesar la imagen sin guardarla en disco
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 15 * 1024 * 1024 }, // Máximo 15MB
+  limits: { fileSize: 15 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('image/')) {
-      cb(null, true);
-    } else {
-      cb(new Error('Solo se permiten archivos de imagen (JPEG, PNG, WebP).'), false);
-    }
+    if (file.mimetype.startsWith('image/')) cb(null, true);
+    else cb(new Error('Solo se permiten archivos de imagen (JPEG, PNG, WebP).'), false);
   },
 });
 
-// Ruta de health check
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', service: 'SistemaVision BE' });
+app.get('/api/health', async (req, res) => {
+  let database = 'disconnected';
+  try {
+    await sequelize.authenticate();
+    database = 'connected';
+  } catch {}
+  res.json({ status: 'ok', service: 'SistemaVision BE', database });
 });
 
-/**
- * Endpoint para procesar la factura con el agentServiceFacturas
- * Admite:
- * 1) Archivo subido vía FormData (campo 'factura')
- * 2) JSON con `imagen` en base64 / data URI o `url`
- */
 app.post('/api/facturas/analizar', upload.single('factura'), async (req, res) => {
   try {
     let imagenInput = null;
@@ -53,15 +48,24 @@ app.post('/api/facturas/analizar', upload.single('factura'), async (req, res) =>
 
     if (!imagenInput) {
       return res.status(400).json({
-        error: 'Debe adjuntar un archivo de imagen en el campo "factura" o enviar "imagen" en el body.',
+        success: false,
+        error: 'Debe adjuntar una imagen en "factura" o enviar "imagen"/"url".',
       });
     }
 
-    const resultado = await analizarFactura(imagenInput, { mimeType });
+    const sessionId = req.body?.session_id || 'default';
+    const resultado = await analizarFactura(imagenInput, {
+      mimeType,
+      detail: req.body?.detail || 'low',
+      context: getContext(sessionId),
+    });
+
+    rememberInvoice(sessionId, resultado);
 
     return res.json({
       success: true,
       data: resultado,
+      memory: getContext(sessionId),
     });
   } catch (error) {
     console.error('Error al analizar factura:', error);
@@ -72,19 +76,45 @@ app.post('/api/facturas/analizar', upload.single('factura'), async (req, res) =>
   }
 });
 
-// Manejo de errores de multer y generales
+app.get('/api/facturas/memoria/:sessionId', (req, res) => {
+  res.json({ success: true, data: getContext(req.params.sessionId) });
+});
+
+app.get('/api/facturas', async (req, res) => {
+  try {
+    const { Factura, FacturaItem } = require('./models');
+    const facturas = await Factura.findAll({
+      include: [{ model: FacturaItem, as: 'items' }],
+      order: [['createdAt', 'DESC']],
+    });
+    res.json({ success: true, data: facturas });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 app.use((err, req, res, next) => {
   if (err instanceof multer.MulterError) {
     return res.status(400).json({ success: false, error: `Error en la subida: ${err.message}` });
-  } else if (err) {
-    return res.status(400).json({ success: false, error: err.message });
   }
+  if (err) return res.status(400).json({ success: false, error: err.message });
   next();
 });
 
-app.listen(PORT, () => {
-  console.log(`Servidor backend corriendo en http://localhost:${PORT}`);
-});
+async function iniciarServidor() {
+  try {
+    await sequelize.authenticate();
+    await sequelize.sync();
+    console.log('Base de datos MySQL conectada y tablas sincronizadas.');
+  } catch (error) {
+    console.error('No se pudo conectar/sincronizar MySQL:', error.message);
+  }
+
+  app.listen(PORT, () => {
+    console.log(`Servidor backend corriendo en http://localhost:${PORT}`);
+  });
+}
+
+if (require.main === module) iniciarServidor();
 
 module.exports = app;
-
