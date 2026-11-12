@@ -74,22 +74,35 @@ function numero(valor) {
   return Number.isFinite(n) ? n : null;
 }
 
+function texto(valor, { mayusculas = false } = {}) {
+  if (valor === null || valor === undefined) return null;
+  const resultado = String(valor).trim().replace(/\s+/g, ' ');
+  if (!resultado) return null;
+  return mayusculas ? resultado.toUpperCase() : resultado;
+}
+
 
 function construirFingerprint(factura) {
   const identidad = {
-    numero_factura: factura.numero_factura ? String(factura.numero_factura).trim().toUpperCase() : null,
-    emisor_nif_rfc: factura.emisor?.nif_rfc ? String(factura.emisor.nif_rfc).trim().toUpperCase() : null,
-    emisor_nombre: factura.emisor?.nombre ? String(factura.emisor.nombre).trim().toUpperCase() : null,
-    receptor_nif_rfc: factura.receptor?.nif_rfc ? String(factura.receptor.nif_rfc).trim().toUpperCase() : null,
-    fecha_emision: factura.fecha_emision ? String(factura.fecha_emision).trim() : null,
-    moneda: factura.moneda ? String(factura.moneda).trim().toUpperCase() : null,
+    // Se incluyen todos los campos persistidos para que solo una factura
+    // realmente idéntica sea considerada duplicada.
+    numero_factura: texto(factura.numero_factura, { mayusculas: true }),
+    fecha_emision: texto(factura.fecha_emision),
+    moneda: texto(factura.moneda, { mayusculas: true }),
+    emisor_nombre: texto(factura.emisor?.nombre, { mayusculas: true }),
+    emisor_nif_rfc: texto(factura.emisor?.nif_rfc, { mayusculas: true }),
+    emisor_direccion: texto(factura.emisor?.direccion, { mayusculas: true }),
+    receptor_nombre: texto(factura.receptor?.nombre, { mayusculas: true }),
+    receptor_nif_rfc: texto(factura.receptor?.nif_rfc, { mayusculas: true }),
+    subtotal: numero(factura.subtotal),
+    impuestos: numero(factura.impuestos),
     total: numero(factura.total),
     items: (factura.items || []).map((item) => ({
-      descripcion: item.descripcion ? String(item.descripcion).trim().toUpperCase() : null,
+      descripcion: texto(item.descripcion, { mayusculas: true }),
       cantidad: numero(item.cantidad),
       precio_unitario: numero(item.precio_unitario),
       importe: numero(item.importe),
-    })),
+    })).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
   };
 
   return crypto

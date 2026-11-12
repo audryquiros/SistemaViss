@@ -90,6 +90,17 @@ function ChatInvoiceTable({ invoices = [] }) {
 }
 
 function renderChatResponse(message) {
+  if (message.type === 'download') {
+    const invoice = message.data?.[0];
+    const downloadUrl = message.download?.url ? `${API_URL}${message.download.url}` : '#';
+    return <>
+      <p className="chat-ai-message">{message.message}</p>
+      <ChatInvoiceCard invoice={invoice} />
+      <a className="chat-ai-download" href={downloadUrl} target="_blank" rel="noreferrer">
+        <span>↓</span> {message.download?.label || 'Descargar archivo'}
+      </a>
+    </>;
+  }
   if (message.type === 'summary') {
     return <><p className="chat-ai-message">{message.message}</p><ChatInvoiceCard invoice={message.data?.[0]} /></>;
   }

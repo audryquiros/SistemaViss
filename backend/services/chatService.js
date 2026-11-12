@@ -7,13 +7,24 @@ const DEFAULT_MODEL = process.env.OPENAI_CHAT_MODEL || process.env.OPENAI_VISION
 
 function normalizarFormato(formato = '') {
   const value = String(formato).toLowerCase();
-  if (value.includes('json')) return 'json';
+  if (value.includes('pdf')) return 'pdf';
+  if (value.includes('excel') || value.includes('xlsx') || value.includes('xls')) return 'excel';
   if (value.includes('csv')) return 'csv';
+  if (value.includes('json')) return 'json';
+  if (value.includes('html')) return 'html';
+  if (value.includes('txt') || value.includes('texto')) return 'txt';
   if (value.includes('tabla')) return 'tabla';
   if (value.includes('detalle') || value.includes('detall')) return 'detalle';
   if (value.includes('resumen')) return 'resumen';
   return 'texto';
 }
+
+function esDescarga(solicitud = '') {
+  const value = String(solicitud).toLowerCase();
+  return /(descarg|export|archivo|documento|gener(a|á)r|dame.*en)/i.test(value) &&
+    /(pdf|excel|xlsx|xls|csv|json|html|txt|texto)/i.test(value);
+}
+
 
 function crearRespuestaVisual(facturas, formato) {
   if (!facturas.length) {
@@ -26,6 +37,30 @@ function crearRespuestaVisual(facturas, formato) {
   }
 
   const primera = facturas[0];
+
+  if (['pdf', 'excel', 'csv', 'json', 'html', 'txt'].includes(formato) && esDescarga(solicitud)) {
+    if (facturas.length !== 1) {
+      return {
+        type: 'table',
+        title: 'Selecciona una factura',
+        message: `Encontré ${facturas.length} facturas. Para descargar una, indícame el número de factura.`,
+        data: facturas,
+      };
+    }
+    const nombres = { pdf: 'PDF', excel: 'Excel', csv: 'CSV', json: 'JSON', html: 'HTML', txt: 'TXT' };
+    return {
+      type: 'download',
+      title: `Factura ${primera.numero_factura || ''}`.trim(),
+      message: `Preparé la factura ${primera.numero_factura || ''} en formato ${nombres[formato]}.`,
+      data: [primera],
+      download: {
+        id: primera.id,
+        format: formato,
+        label: `Descargar ${nombres[formato]}`,
+        url: `/api/facturas/${primera.id}/export/${formato}`,
+      },
+    };
+  }
 
   if (formato === 'json') {
     return {
@@ -155,7 +190,7 @@ async function llamarOpenAI(input, tools = construirHerramientas()) {
       instructions:
         'Eres el asistente de SistemaVision. Ayudas a consultar facturas almacenadas en MySQL. ' +
         'Nunca inventes datos. Si el usuario pide una factura concreta, usa buscar_facturas. ' +
-        'Si pide un formato, respétalo. Puedes responder en JSON, CSV, tabla Markdown, resumen o texto. ' +
+        'Si pide un formato, respétalo. Puede solicitar PDF, Excel, CSV, JSON, HTML o TXT para descargar la factura. ' +
         'No expongas detalles internos de herramientas ni claves.',
       input,
       ...(tools.length ? { tools, tool_choice: 'auto' } : {}),

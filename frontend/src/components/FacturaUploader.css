@@ -271,3 +271,5 @@
   .chat-ai-card-head { align-items:flex-start; }
   .chat-ai-table { min-width:520px; }
 }
+
+.chat-ai-download{display:inline-flex;align-items:center;gap:8px;margin-top:12px;padding:10px 14px;border-radius:10px;text-decoration:none;font-weight:700;background:#24355f;color:#fff;transition:transform .18s ease,opacity .18s ease}.chat-ai-download:hover{transform:translateY(-1px);opacity:.92}.chat-ai-download span{font-size:16px}
