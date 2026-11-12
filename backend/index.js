@@ -3,7 +3,7 @@ const cors = require('cors');
 const multer = require('multer');
 require('dotenv').config();
 
-const { analizarFactura } = require('./services/agentServiceFacturas');
+const { analizarFactura, ejecutarHerramientaGuardarFactura } = require('./services/agentServiceFacturas');
 const { getContext, rememberInvoice } = require('./memory/agentMemory');
 const { conversarConAgente } = require('./services/chatService');
 const { createPdfBuffer } = require('./services/invoicePdfService');
@@ -179,6 +179,55 @@ app.post('/api/chat', async (req, res) => {
   }
 });
 
+
+app.post('/api/facturas/manual', async (req, res) => {
+  try {
+    const factura = req.body?.factura;
+    if (!factura) {
+      return res.status(400).json({ success: false, error: 'Debes enviar los datos de la factura.' });
+    }
+
+    const resultado = await ejecutarHerramientaGuardarFactura({
+      factura,
+      nivel_detalle: 'manual',
+    });
+
+    const { Factura, FacturaItem } = require('./models');
+    const guardada = await Factura.findByPk(resultado.id, {
+      include: [{ model: FacturaItem, as: 'items' }],
+    });
+
+    if (!guardada) {
+      return res.status(500).json({ success: false, error: 'La factura se guardó, pero no pudo recuperarse para generar el archivo.' });
+    }
+
+    const plain = guardada.toJSON();
+    const formato = String(req.body?.formato || 'pdf').toLowerCase();
+    const formatosPermitidos = ['pdf', 'excel', 'csv', 'json', 'html', 'txt'];
+    if (!formatosPermitidos.includes(formato)) {
+      return res.status(400).json({ success: false, error: 'Formato de factura no soportado.' });
+    }
+
+    return res.status(201).json({
+      success: true,
+      message: `Factura ${plain.numero_factura || ''} creada correctamente.`.trim(),
+      data: plain,
+      download: {
+        id: plain.id,
+        format: formato,
+        label: `Descargar ${formato === 'excel' ? 'Excel' : formato.toUpperCase()}`,
+        url: `/api/facturas/${plain.id}/export/${formato}`,
+      },
+    });
+  } catch (error) {
+    console.error('Error creando factura manual:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      error: error.message || 'No se pudo crear la factura.',
+      ...(error.statusCode === 409 ? { duplicate: true, facturaExistente: error.facturaExistente } : {}),
+    });
+  }
+});
 
 app.get('/api/facturas/:id/export/:format', async (req, res) => {
   try {

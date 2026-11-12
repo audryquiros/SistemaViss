@@ -84,3 +84,10 @@ Body:
 ```
 
 El agente puede usar la herramienta `buscar_facturas` para consultar MySQL y luego entregar el resultado en el formato solicitado.
+
+## Nuevas páginas
+
+- `/` — lectura de facturas, validación, memoria y chat IA.
+- `/crear-factura` — creación manual de facturas, cálculo automático y exportación.
+
+La creación manual usa `POST /api/facturas/manual`, guarda la factura en MySQL y permite descargarla en PDF, Excel, CSV, JSON, HTML o TXT. La validación de duplicados se mantiene por fingerprint completo: una factura con el mismo número pero con cambios reales puede guardarse.

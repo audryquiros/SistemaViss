@@ -273,3 +273,5 @@
 }
 
 .chat-ai-download{display:inline-flex;align-items:center;gap:8px;margin-top:12px;padding:10px 14px;border-radius:10px;text-decoration:none;font-weight:700;background:#24355f;color:#fff;transition:transform .18s ease,opacity .18s ease}.chat-ai-download:hover{transform:translateY(-1px);opacity:.92}.chat-ai-download span{font-size:16px}
+
+.chat-ai-download-wrap{margin-top:12px;display:flex;flex-direction:column;gap:6px;align-items:flex-start}.chat-ai-download{display:inline-flex;align-items:center;gap:8px;border:0;border-radius:11px;padding:10px 14px;background:linear-gradient(135deg,#23365d,#4d55bf);color:#fff;font-weight:900;font-size:.74rem;cursor:pointer;text-decoration:none;box-shadow:0 8px 18px rgba(45,58,120,.16);transition:transform .18s ease,box-shadow .18s ease,opacity .18s ease}.chat-ai-download:hover{transform:translateY(-1px);box-shadow:0 11px 24px rgba(45,58,120,.22)}.chat-ai-download:disabled{opacity:.55;cursor:wait;transform:none}.chat-ai-download-error{color:#a5362d;font-size:.68rem}

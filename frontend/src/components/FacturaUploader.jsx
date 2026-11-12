@@ -89,16 +89,50 @@ function ChatInvoiceTable({ invoices = [] }) {
   );
 }
 
+async function descargarArchivo(download) {
+  if (!download?.url) throw new Error('No hay un archivo de descarga disponible.');
+  const response = await fetch(`${API_URL}${download.url}`);
+  if (!response.ok) {
+    let detail = 'No se pudo generar el archivo.';
+    try { const body = await response.json(); detail = body.error || detail; } catch {}
+    throw new Error(detail);
+  }
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = objectUrl;
+  anchor.download = download.filename || `factura.${download.format || 'bin'}`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+}
+
+function DownloadButton({ download }) {
+  const [downloading, setDownloading] = useState(false);
+  const [error, setError] = useState('');
+  const handleDownload = async () => {
+    if (downloading) return;
+    setDownloading(true); setError('');
+    try { await descargarArchivo(download); }
+    catch (err) { setError(err.message || 'No se pudo descargar el archivo.'); }
+    finally { setDownloading(false); }
+  };
+  return <div className="chat-ai-download-wrap">
+    <button type="button" className="chat-ai-download" onClick={handleDownload} disabled={downloading}>
+      <span>{downloading ? '…' : '↓'}</span> {downloading ? 'Preparando archivo…' : (download?.label || 'Descargar archivo')}
+    </button>
+    {error && <small className="chat-ai-download-error">{error}</small>}
+  </div>;
+}
+
 function renderChatResponse(message) {
   if (message.type === 'download') {
     const invoice = message.data?.[0];
-    const downloadUrl = message.download?.url ? `${API_URL}${message.download.url}` : '#';
     return <>
       <p className="chat-ai-message">{message.message}</p>
       <ChatInvoiceCard invoice={invoice} />
-      <a className="chat-ai-download" href={downloadUrl} target="_blank" rel="noreferrer">
-        <span>↓</span> {message.download?.label || 'Descargar archivo'}
-      </a>
+      <DownloadButton download={message.download} />
     </>;
   }
   if (message.type === 'summary') {
@@ -228,6 +262,7 @@ export default function FacturaUploader() {
         message: data.data.message || data.data.answer,
         data: data.data.data || [],
         referencias: data.data.referencias || [],
+        download: data.data.download || null,
       }]);
       setHistorial(data.memory?.invoices || historial);
     } catch (err) {

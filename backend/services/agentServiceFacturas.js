@@ -594,4 +594,4 @@ async function analizarFactura(imagenInput, opciones = {}) {
   };
 }
 
-module.exports = { analizarFactura, construirFingerprint, FacturaDuplicadaError };
+module.exports = { analizarFactura, construirFingerprint, FacturaDuplicadaError, ejecutarHerramientaGuardarFactura, normalizarFactura, validarFactura };

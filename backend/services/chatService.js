@@ -26,7 +26,7 @@ function esDescarga(solicitud = '') {
 }
 
 
-function crearRespuestaVisual(facturas, formato) {
+function crearRespuestaVisual(facturas, formato, solicitud = '') {
   if (!facturas.length) {
     return {
       type: 'empty',
@@ -261,7 +261,7 @@ async function conversarConAgente(sessionId, message, context = {}) {
     }
 
     const formato = normalizarFormato(userMessage);
-    const vista = crearRespuestaVisual(referencias, formato);
+    const vista = crearRespuestaVisual(referencias, formato, userMessage);
 
     // El frontend recibe datos estructurados y decide cómo presentarlos.
     // Así evitamos Markdown crudo y mantenemos una respuesta consistente.
@@ -278,6 +278,31 @@ async function conversarConAgente(sessionId, message, context = {}) {
       data: vista.data,
       referencias,
       formato,
+      download: vista.download || null,
+    };
+  }
+
+  // Si el modelo no activa la herramienta, resolvemos de forma determinista
+  // las solicitudes explícitas de exportación para no devolver un enlace ficticio.
+  const formatoDirecto = normalizarFormato(userMessage);
+  if (esDescarga(userMessage) && ['pdf', 'excel', 'csv', 'json', 'html', 'txt'].includes(formatoDirecto)) {
+    const match = userMessage.match(/(?:fac(?:tura)?(?:\s*(?:n(?:ú|u)mero|#)?)?\s*)?([A-Z]{2,6}[- ]?\d{3,})/i);
+    const numero = match?.[1]?.replace(/\s+/g, '-');
+    const facturasDirectas = await buscarFacturas({ numero_factura: numero, limite: 5 });
+    const vistaDirecta = crearRespuestaVisual(facturasDirectas, formatoDirecto, userMessage);
+    rememberChat(sessionId, 'assistant', vistaDirecta.message, {
+      referencias: facturasDirectas.map((f) => f.id),
+      responseType: vistaDirecta.type,
+    });
+    return {
+      answer: vistaDirecta.message,
+      type: vistaDirecta.type,
+      title: vistaDirecta.title,
+      message: vistaDirecta.message,
+      data: vistaDirecta.data,
+      referencias: facturasDirectas,
+      formato: formatoDirecto,
+      download: vistaDirecta.download || null,
     };
   }
 
@@ -290,7 +315,7 @@ async function conversarConAgente(sessionId, message, context = {}) {
     message: answer,
     data: [],
     referencias: [],
-    formato: normalizarFormato(userMessage),
+    formato: formatoDirecto,
   };
 }
 
