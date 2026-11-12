@@ -23,6 +23,40 @@ const upload = multer({
   },
 });
 
+async function asegurarEsquemaFacturas() {
+  const database = sequelize.getDatabaseName();
+  const [columnas] = await sequelize.query(`
+    SELECT COUNT(*) AS total
+    FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA = ?
+      AND TABLE_NAME = 'facturas'
+      AND COLUMN_NAME = 'fingerprint'
+  `, { replacements: [database] });
+
+  if (Number(columnas[0].total) === 0) {
+    console.log('Agregando columna fingerprint a facturas...');
+    await sequelize.query(`
+      ALTER TABLE facturas
+      ADD COLUMN fingerprint VARCHAR(64) NULL
+    `);
+  }
+
+  const [indices] = await sequelize.query(`
+    SELECT COUNT(*) AS total
+    FROM INFORMATION_SCHEMA.STATISTICS
+    WHERE TABLE_SCHEMA = ?
+      AND TABLE_NAME = 'facturas'
+      AND INDEX_NAME = 'uq_facturas_fingerprint'
+  `, { replacements: [database] });
+
+  if (Number(indices[0].total) === 0) {
+    await sequelize.query(`
+      ALTER TABLE facturas
+      ADD UNIQUE KEY uq_facturas_fingerprint (fingerprint)
+    `);
+  }
+}
+
 app.get('/api/health', async (req, res) => {
   let database = 'disconnected';
   try {
@@ -69,9 +103,11 @@ app.post('/api/facturas/analizar', upload.single('factura'), async (req, res) =>
     });
   } catch (error) {
     console.error('Error al analizar factura:', error);
-    return res.status(500).json({
+    const status = error.statusCode || 500;
+    return res.status(status).json({
       success: false,
       error: error.message || 'Error interno al procesar la factura.',
+      ...(error.statusCode === 409 ? { duplicate: true, facturaExistente: error.facturaExistente } : {}),
     });
   }
 });
@@ -104,6 +140,7 @@ app.use((err, req, res, next) => {
 async function iniciarServidor() {
   try {
     await sequelize.authenticate();
+    await asegurarEsquemaFacturas();
     await sequelize.sync();
     console.log('Base de datos MySQL conectada y tablas sincronizadas.');
   } catch (error) {

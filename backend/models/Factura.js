@@ -14,6 +14,7 @@ module.exports = (sequelize, DataTypes) => {
     total: { type: DataTypes.DECIMAL(15, 2), allowNull: true },
     raw_json: { type: DataTypes.JSON, allowNull: true },
     nivel_detalle: { type: DataTypes.STRING(10), allowNull: true },
+    fingerprint: { type: DataTypes.STRING(64), allowNull: true, unique: true },
   }, {
     tableName: 'facturas',
     timestamps: true,

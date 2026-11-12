@@ -35,11 +35,14 @@ CREATE TABLE IF NOT EXISTS facturas (
 
     nivel_detalle VARCHAR(10) NULL,
 
+    fingerprint VARCHAR(64) NULL,
+
     createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
         ON UPDATE CURRENT_TIMESTAMP,
 
-    PRIMARY KEY (id)
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_facturas_fingerprint (fingerprint)
 );
 
 -- =====================================================
