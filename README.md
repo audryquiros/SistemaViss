@@ -1,30 +1,41 @@
-# SistemaVision — Agente IA para lectura de facturas
+# SistemaVision — Agente IA para lectura y consulta de facturas
 
-## Qué se completó
-- Backend Express + Multer.
-- Agente de visión con OpenAI Responses API.
-- Function Calling con herramienta `guardar_factura`.
-- Reintento automático: inicia en `low` y sube a `high` si faltan campos críticos.
-- Memoria de sesión para conservar facturas recientes.
-- Persistencia MySQL con Sequelize (`facturas` y `factura_items`).
-- Frontend React/Vite para subir y visualizar facturas.
-- Visualización del recorrido operativo del agente.
-- Endpoint para consultar memoria e historial persistido.
+SistemaVision es una aplicación React + Express + MySQL que utiliza un agente de IA para leer facturas, validar sus cálculos, detectar duplicados exactos, guardar la información y permitir consultas en lenguaje natural.
 
-## 1. Backend
+## Funcionalidades
+
+- Lectura de facturas mediante OpenAI Vision.
+- Function Calling para guardar facturas en MySQL.
+- Reintento automático de visión `low` → `high` cuando faltan datos críticos.
+- Validación de cantidades, precios, importes, subtotal, impuestos y total.
+- Detección de duplicados mediante fingerprint SHA-256.
+- El mismo número de factura puede registrarse nuevamente si cambia cualquier dato relevante de la factura.
+- Chat con IA para consultar facturas guardadas.
+- El chat puede devolver una factura como JSON, CSV, tabla, resumen o texto.
+- Memoria de sesión para facturas y conversaciones recientes.
+- Interfaz responsive con animaciones, estados, toasts y confirmaciones personalizadas.
+
+## Regla de duplicados
+
+La duplicidad no se determina solamente por `numero_factura`. El fingerprint utiliza los datos principales de la factura y sus líneas. Por eso:
+
+- misma factura + mismos datos → `409 FacturaDuplicadaError`;
+- mismo número + cambio real en total, fecha, emisor, moneda o líneas → nuevo fingerprint y se permite guardar.
+
+## Backend
 
 ```bash
 cd backend
 npm install
 ```
 
-Crea `.env` basado en `.env.example`:
+Crea `.env` desde `.env.example`:
 
 ```env
 PORT=3001
 OPENAI_API_KEY=TU_CLAVE
 OPENAI_VISION_MODEL=gpt-4o
-
+OPENAI_CHAT_MODEL=gpt-4o
 DB_HOST=127.0.0.1
 DB_PORT=3306
 DB_NAME=sistemavision
@@ -32,15 +43,16 @@ DB_USER=root
 DB_PASSWORD=
 ```
 
-Crea la base de datos MySQL `sistemavision` y luego:
+Luego:
 
 ```bash
+npm run db:setup
 npm run dev
 ```
 
-El backend queda en `http://localhost:3001`.
+Backend: `http://localhost:3001`
 
-## 2. Frontend
+## Frontend
 
 ```bash
 cd frontend
@@ -48,23 +60,27 @@ npm install
 npm run dev
 ```
 
-Vite mostrará la URL del frontend, normalmente `http://localhost:5173`.
+Frontend: normalmente `http://localhost:5173`
 
-Opcionalmente puedes crear `frontend/.env`:
+Opcional:
 
 ```env
 VITE_API_URL=http://localhost:3001
 ```
 
-## 3. Flujo de la práctica
+## Chat
 
-1. El usuario sube una factura.
-2. Multer recibe la imagen en memoria.
-3. El agente la envía a visión con detalle `low`.
-4. El modelo extrae los datos y puede decidir llamar `guardar_factura`.
-5. Si faltan campos críticos, el backend reintenta con detalle `high`.
-6. Si el agente decide guardar, la herramienta persiste la factura y sus items en MySQL.
-7. El resultado vuelve al frontend.
-8. El backend conserva memoria de la sesión para la siguiente factura.
+Endpoint:
 
-> La API key nunca debe colocarse en el frontend.
+`POST /api/chat`
+
+Body:
+
+```json
+{
+  "session_id": "sesion-del-usuario",
+  "message": "Dame la factura FAC-2026-00125 en JSON"
+}
+```
+
+El agente puede usar la herramienta `buscar_facturas` para consultar MySQL y luego entregar el resultado en el formato solicitado.

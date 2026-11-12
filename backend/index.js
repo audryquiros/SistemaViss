@@ -5,6 +5,7 @@ require('dotenv').config();
 
 const { analizarFactura } = require('./services/agentServiceFacturas');
 const { getContext, rememberInvoice } = require('./memory/agentMemory');
+const { conversarConAgente } = require('./services/chatService');
 const { sequelize } = require('./models');
 
 const app = express();
@@ -114,6 +115,25 @@ app.post('/api/facturas/analizar', upload.single('factura'), async (req, res) =>
 
 app.get('/api/facturas/memoria/:sessionId', (req, res) => {
   res.json({ success: true, data: getContext(req.params.sessionId) });
+});
+
+app.post('/api/chat', async (req, res) => {
+  try {
+    const sessionId = req.body?.session_id || 'default';
+    const message = req.body?.message;
+    const result = await conversarConAgente(sessionId, message, getContext(sessionId));
+    return res.json({
+      success: true,
+      data: result,
+      memory: getContext(sessionId),
+    });
+  } catch (error) {
+    console.error('Error en chat del agente:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      error: error.message || 'No se pudo procesar la solicitud del asistente.',
+    });
+  }
 });
 
 app.get('/api/facturas', async (req, res) => {

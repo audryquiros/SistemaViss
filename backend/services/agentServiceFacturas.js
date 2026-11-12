@@ -171,7 +171,8 @@ function construirHerramientas() {
       name: 'guardar_factura',
       description:
         'Guarda en MySQL una factura que ya fue extraída de la imagen. ' +
-        'Usa esta herramienta cuando los datos sean suficientemente claros.',
+        'Usa esta herramienta cuando los datos sean suficientemente claros. ' +
+        'El mismo número de factura puede existir si sus datos cambiaron; el duplicado se determina por fingerprint completo.',
       parameters: {
         type: 'object',
         properties: {
@@ -353,21 +354,9 @@ async function ejecutarHerramientaGuardarFactura(args) {
     throw new FacturaDuplicadaError(existente.toJSON());
   }
 
-  // Segunda barrera: una misma factura normalmente mantiene número + emisor.
-  if (payload.numero_factura) {
-    const condiciones = { numero_factura: payload.numero_factura };
-    if (payload.emisor?.nif_rfc) condiciones.emisor_nif_rfc = payload.emisor.nif_rfc;
-    else if (payload.emisor?.nombre) condiciones.emisor_nombre = payload.emisor.nombre;
-
-    const existentePorIdentidad = await Factura.findOne({
-      where: condiciones,
-      attributes: ['id', 'numero_factura', 'fecha_emision', 'total', 'createdAt'],
-    });
-
-    if (existentePorIdentidad) {
-      throw new FacturaDuplicadaError(existentePorIdentidad.toJSON());
-    }
-  }
+  // Importante: el número de factura NO basta para marcar un duplicado.
+  // Una factura con el mismo número pero con cambios reales en sus datos
+  // genera otro fingerprint y puede almacenarse.
 
   const transaction = await sequelize.transaction();
 
