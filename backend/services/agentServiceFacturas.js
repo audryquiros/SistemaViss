@@ -334,6 +334,63 @@ function parsearJSON(texto) {
   }
 }
 
+async function encontrarFacturaDuplicada(Factura, FacturaItem, payload, fingerprint) {
+  // Primera comprobación: fingerprint exacto para registros nuevos.
+  const porFingerprint = await Factura.findOne({
+    where: { fingerprint },
+    include: [{ model: FacturaItem, as: 'items' }],
+    attributes: ['id', 'numero_factura', 'fecha_emision', 'total', 'createdAt', 'fingerprint'],
+  });
+
+  if (porFingerprint) return porFingerprint;
+
+  // Compatibilidad con facturas antiguas que fueron guardadas antes de
+  // incorporar el campo fingerprint. Se compara el contenido completo,
+  // no solamente el número de factura.
+  if (payload.numero_factura) {
+    const candidatas = await Factura.findAll({
+      where: { numero_factura: payload.numero_factura },
+      include: [{ model: FacturaItem, as: 'items' }],
+      attributes: [
+        'id', 'numero_factura', 'fecha_emision', 'moneda',
+        'emisor_nombre', 'emisor_nif_rfc', 'emisor_direccion',
+        'receptor_nombre', 'receptor_nif_rfc', 'subtotal', 'impuestos',
+        'total', 'raw_json', 'createdAt', 'fingerprint',
+      ],
+      order: [['id', 'ASC']],
+      limit: 25,
+    });
+
+    for (const candidata of candidatas) {
+      if (candidata.fingerprint && candidata.fingerprint === fingerprint) return candidata;
+
+      const datos = candidata.toJSON();
+      const reconstruida = normalizarFactura({
+        numero_factura: datos.numero_factura,
+        fecha_emision: datos.fecha_emision,
+        moneda: datos.moneda,
+        emisor: {
+          nombre: datos.emisor_nombre,
+          nif_rfc: datos.emisor_nif_rfc,
+          direccion: datos.emisor_direccion,
+        },
+        receptor: {
+          nombre: datos.receptor_nombre,
+          nif_rfc: datos.receptor_nif_rfc,
+        },
+        subtotal: datos.subtotal,
+        impuestos: datos.impuestos,
+        total: datos.total,
+        items: datos.items || [],
+      });
+
+      if (construirFingerprint(reconstruida) === fingerprint) return candidata;
+    }
+  }
+
+  return null;
+}
+
 async function ejecutarHerramientaGuardarFactura(args) {
   const { Factura, FacturaItem, sequelize } = require('../models');
   const payload = normalizarFactura(args.factura);
@@ -345,11 +402,7 @@ async function ejecutarHerramientaGuardarFactura(args) {
 
   const fingerprint = construirFingerprint(payload);
 
-  const existente = await Factura.findOne({
-    where: { fingerprint },
-    attributes: ['id', 'numero_factura', 'fecha_emision', 'total', 'createdAt'],
-  });
-
+  const existente = await encontrarFacturaDuplicada(Factura, FacturaItem, payload, fingerprint);
   if (existente) {
     throw new FacturaDuplicadaError(existente.toJSON());
   }
@@ -403,10 +456,7 @@ async function ejecutarHerramientaGuardarFactura(args) {
     await transaction.rollback();
 
     if (error?.name === 'SequelizeUniqueConstraintError') {
-      const duplicada = await Factura.findOne({
-        where: { fingerprint },
-        attributes: ['id', 'numero_factura', 'fecha_emision', 'total', 'createdAt'],
-      });
+      const duplicada = await encontrarFacturaDuplicada(Factura, FacturaItem, payload, fingerprint);
       if (duplicada) throw new FacturaDuplicadaError(duplicada.toJSON());
     }
 

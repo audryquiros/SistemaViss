@@ -31,6 +31,91 @@ function prettyStep(action) {
   return labels[action] || action.replaceAll('_', ' ');
 }
 
+
+function ChatInvoiceCard({ invoice, detail = false }) {
+  if (!invoice) return null;
+  return (
+    <div className="chat-ai-card">
+      <div className="chat-ai-card-head">
+        <div>
+          <span className="chat-ai-kicker">FACTURA</span>
+          <strong>{invoice.numero_factura || 'Sin número'}</strong>
+          <small>{invoice.fecha_emision || 'Fecha no disponible'}</small>
+        </div>
+        <div className="chat-ai-total">
+          <span>Total</span>
+          <strong>{money(invoice.total, invoice.moneda)}</strong>
+        </div>
+      </div>
+      <div className="chat-ai-grid">
+        <div><span>Emisor</span><strong>{invoice.emisor?.nombre || '—'}</strong></div>
+        <div><span>Receptor</span><strong>{invoice.receptor?.nombre || '—'}</strong></div>
+        <div><span>Subtotal</span><strong>{money(invoice.subtotal, invoice.moneda)}</strong></div>
+        <div><span>Impuestos</span><strong>{money(invoice.impuestos, invoice.moneda)}</strong></div>
+      </div>
+      {detail && invoice.items?.length > 0 && (
+        <div className="chat-ai-items">
+          <div className="chat-ai-items-title">Productos y servicios</div>
+          {invoice.items.map((item, index) => (
+            <div className="chat-ai-item" key={index}>
+              <div><strong>{item.descripcion || 'Sin descripción'}</strong><small>{item.cantidad ?? '—'} × {money(item.precio_unitario, invoice.moneda)}</small></div>
+              <strong>{money(item.importe, invoice.moneda)}</strong>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ChatInvoiceTable({ invoices = [] }) {
+  return (
+    <div className="chat-ai-table-wrap">
+      <table className="chat-ai-table">
+        <thead><tr><th>Factura</th><th>Fecha</th><th>Emisor</th><th>Subtotal</th><th>Total</th></tr></thead>
+        <tbody>
+          {invoices.map((invoice) => (
+            <tr key={invoice.id}>
+              <td><strong>{invoice.numero_factura || '—'}</strong></td>
+              <td>{invoice.fecha_emision || '—'}</td>
+              <td>{invoice.emisor?.nombre || '—'}</td>
+              <td>{money(invoice.subtotal, invoice.moneda)}</td>
+              <td><strong>{money(invoice.total, invoice.moneda)}</strong></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function renderChatResponse(message) {
+  if (message.type === 'summary') {
+    return <><p className="chat-ai-message">{message.message}</p><ChatInvoiceCard invoice={message.data?.[0]} /></>;
+  }
+  if (message.type === 'invoice') {
+    return <><p className="chat-ai-message">{message.message}</p><ChatInvoiceCard invoice={message.data?.[0]} detail /></>;
+  }
+  if (message.type === 'table') {
+    return <><p className="chat-ai-message">{message.message}</p><ChatInvoiceTable invoices={message.data} /></>;
+  }
+  if (message.type === 'json') {
+    return (
+      <div className="chat-ai-json">
+        <div className="chat-ai-json-head"><span>JSON estructurado</span><small>{message.data?.length || 0} registro(s)</small></div>
+        <pre>{JSON.stringify(message.data?.length === 1 ? message.data[0] : message.data, null, 2)}</pre>
+      </div>
+    );
+  }
+  if (message.type === 'empty') {
+    return <div className="chat-ai-empty"><span>⌕</span><div><strong>{message.title || 'Sin resultados'}</strong><small>{message.message}</small></div></div>;
+  }
+  if (message.type === 'error') {
+    return <div className="chat-ai-error">⚠ {message.message}</div>;
+  }
+  return <p className="chat-ai-message">{message.message || message.content || 'No pude generar una respuesta.'}</p>;
+}
+
 export default function FacturaUploader() {
   const [archivo, setArchivo] = useState(null);
   const [preview, setPreview] = useState(null);
@@ -124,7 +209,15 @@ export default function FacturaUploader() {
       });
       const data = await response.json();
       if (!response.ok || !data.success) throw new Error(data.error || 'No se pudo consultar al agente.');
-      setMensajes((prev) => [...prev, { role: 'assistant', content: data.data.answer, referencias: data.data.referencias || [] }]);
+      setMensajes((prev) => [...prev, {
+        role: 'assistant',
+        content: data.data.answer,
+        type: data.data.type || 'text',
+        title: data.data.title || 'SistemaVision',
+        message: data.data.message || data.data.answer,
+        data: data.data.data || [],
+        referencias: data.data.referencias || [],
+      }]);
       setHistorial(data.memory?.invoices || historial);
     } catch (err) {
       setMensajes((prev) => [...prev, { role: 'assistant', content: `No pude completar la consulta: ${err.message}` }]);
@@ -185,7 +278,7 @@ export default function FacturaUploader() {
       <section className="lower-grid">
         <section className="memory-section glass-card"><div className="memory-header"><div><p className="eyebrow">MEMORIA</p><h2>Facturas recientes</h2></div><span className="memory-count">{historial.length}</span></div>{historial.length > 0 ? <div className="memory-list">{historial.map((item, index) => <div className="memory-card" key={`${item.numero_factura}-${index}`}><div className="memory-card-top"><strong>{item.numero_factura || 'Sin número'}</strong><span>✓</span></div><span>{item.emisor || 'Emisor no detectado'}</span><small>{money(item.total, item.moneda)}</small></div>)}</div> : <div className="empty-memory"><span>◌</span><p>Las facturas procesadas durante esta sesión aparecerán aquí.</p></div>}</section>
 
-        <section className="chat-section glass-card"><div className="chat-header"><div><p className="eyebrow">AI ASSISTANT</p><h2>Pregúntale a tus facturas</h2><p>Ejemplos: “Dame FAC-2026-00125 en JSON” o “muéstrame la factura 125 en tabla”.</p></div><span className="chat-badge">✦ IA</span></div><div className="chat-messages">{mensajes.length === 0 ? <div className="chat-empty"><div className="sparkle">✦</div><strong>¿Qué quieres consultar?</strong><span>El agente puede buscar una factura y devolvértela en el formato que pidas.</span><div className="suggestions"><button onClick={() => setChatInput('Dame la última factura en resumen')}>Última factura · resumen</button><button onClick={() => setChatInput('Dame la factura FAC-2026-00125 en JSON')}>Factura · JSON</button><button onClick={() => setChatInput('Muéstrame la factura FAC-2026-00125 en tabla')}>Factura · tabla</button></div></div> : mensajes.map((msg, index) => <div className={`chat-message ${msg.role}`} key={index}><div className="avatar">{msg.role === 'user' ? 'Tú' : '✦'}</div><div className="bubble">{msg.content}</div></div>)}{chatCargando && <div className="chat-message assistant"><div className="avatar">✦</div><div className="bubble typing"><i /><i /><i /></div></div>}</div><form className="chat-form" onSubmit={enviarChat}><input value={chatInput} onChange={(e) => setChatInput(e.target.value)} placeholder="Pídele algo al agente..." disabled={chatCargando} /><button type="submit" disabled={!chatInput.trim() || chatCargando}>Enviar <span>→</span></button></form></section>
+        <section className="chat-section glass-card"><div className="chat-header"><div><p className="eyebrow">AI ASSISTANT</p><h2>Pregúntale a tus facturas</h2><p>Ejemplos: “Dame FAC-2026-00125 en JSON” o “muéstrame la factura 125 en tabla”.</p></div><span className="chat-badge">✦ IA</span></div><div className="chat-messages">{mensajes.length === 0 ? <div className="chat-empty"><div className="sparkle">✦</div><strong>¿Qué quieres consultar?</strong><span>El agente puede buscar una factura y devolvértela en el formato que pidas.</span><div className="suggestions"><button onClick={() => setChatInput('Dame la última factura en resumen')}>Última factura · resumen</button><button onClick={() => setChatInput('Dame la factura FAC-2026-00125 en JSON')}>Factura · JSON</button><button onClick={() => setChatInput('Muéstrame la factura FAC-2026-00125 en tabla')}>Factura · tabla</button></div></div> : mensajes.map((msg, index) => <div className={`chat-message ${msg.role}`} key={index}><div className="avatar">{msg.role === 'user' ? 'Tú' : '✦'}</div><div className="bubble">{msg.role === 'assistant' ? <><div className="chat-ai-title">{msg.title || 'SistemaVision'}</div>{renderChatResponse(msg)}</> : msg.content}</div></div>)}{chatCargando && <div className="chat-message assistant"><div className="avatar">✦</div><div className="bubble typing"><i /><i /><i /></div></div>}</div><form className="chat-form" onSubmit={enviarChat}><input value={chatInput} onChange={(e) => setChatInput(e.target.value)} placeholder="Pídele algo al agente..." disabled={chatCargando} /><button type="submit" disabled={!chatInput.trim() || chatCargando}>Enviar <span>→</span></button></form></section>
       </section>
 
       <footer className="app-footer">SistemaVision · Agente IA para lectura, validación, memoria y consulta de facturas</footer>

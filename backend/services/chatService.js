@@ -10,8 +10,65 @@ function normalizarFormato(formato = '') {
   if (value.includes('json')) return 'json';
   if (value.includes('csv')) return 'csv';
   if (value.includes('tabla')) return 'tabla';
+  if (value.includes('detalle') || value.includes('detall')) return 'detalle';
   if (value.includes('resumen')) return 'resumen';
   return 'texto';
+}
+
+function crearRespuestaVisual(facturas, formato) {
+  if (!facturas.length) {
+    return {
+      type: 'empty',
+      title: 'No encontré esa factura',
+      message: 'No hay facturas guardadas que coincidan con tu solicitud.',
+      data: [],
+    };
+  }
+
+  const primera = facturas[0];
+
+  if (formato === 'json') {
+    return {
+      type: 'json',
+      title: facturas.length === 1 ? `Factura ${primera.numero_factura || ''}`.trim() : 'Facturas encontradas',
+      message: `Encontré ${facturas.length} factura${facturas.length === 1 ? '' : 's'}.`,
+      data: facturas,
+    };
+  }
+
+  if (formato === 'tabla') {
+    return {
+      type: 'table',
+      title: facturas.length === 1 ? `Factura ${primera.numero_factura || ''}`.trim() : 'Facturas encontradas',
+      message: `Encontré ${facturas.length} factura${facturas.length === 1 ? '' : 's'} para tu búsqueda.`,
+      data: facturas,
+    };
+  }
+
+  if (formato === 'detalle') {
+    return {
+      type: 'invoice',
+      title: `Factura ${primera.numero_factura || 'sin número'}`,
+      message: 'Aquí tienes el detalle completo de la factura.',
+      data: [primera],
+    };
+  }
+
+  if (formato === 'resumen') {
+    return {
+      type: 'summary',
+      title: `Factura ${primera.numero_factura || 'sin número'}`,
+      message: `Encontré ${facturas.length} factura${facturas.length === 1 ? '' : 's'}. Te muestro un resumen de la más reciente.`,
+      data: [primera],
+    };
+  }
+
+  return {
+    type: 'text',
+    title: `Factura ${primera.numero_factura || 'sin número'}`,
+    message: `Encontré ${facturas.length} factura${facturas.length === 1 ? '' : 's'}.`,
+    data: facturas,
+  };
 }
 
 function facturaPublica(factura) {
@@ -169,35 +226,21 @@ async function conversarConAgente(sessionId, message, context = {}) {
     }
 
     const formato = normalizarFormato(userMessage);
-    const instruccionesFormato = {
-      json: 'Entrega JSON válido y únicamente JSON, sin bloques markdown ni explicación adicional.',
-      csv: 'Entrega CSV válido con encabezados y filas. No agregues explicación fuera del CSV.',
-      tabla: 'Entrega una tabla Markdown clara y legible.',
-      resumen: 'Entrega un resumen breve con los datos más importantes.',
-      texto: 'Entrega una respuesta clara en texto, manteniendo los datos exactos.',
-    };
+    const vista = crearRespuestaVisual(referencias, formato);
 
-    const secondInput = [
-      ...input,
-      ...(firstResponse.output || []),
-      ...toolOutputs,
-      {
-        role: 'user',
-        content: [
-          {
-            type: 'input_text',
-            text: 'Ahora responde al usuario usando exclusivamente los datos obtenidos de las herramientas cuando se trate de facturas. ' + instruccionesFormato[formato],
-          },
-        ],
-      },
-    ];
-
-    const finalResponse = await llamarOpenAI(secondInput, []);
-    const answer = extraerTexto(finalResponse) || 'Encontré la información, pero no pude generar la respuesta.';
-    rememberChat(sessionId, 'assistant', answer, { referencias: referencias.map((f) => f.id) });
+    // El frontend recibe datos estructurados y decide cómo presentarlos.
+    // Así evitamos Markdown crudo y mantenemos una respuesta consistente.
+    rememberChat(sessionId, 'assistant', vista.message, {
+      referencias: referencias.map((f) => f.id),
+      responseType: vista.type,
+    });
 
     return {
-      answer,
+      answer: vista.message,
+      type: vista.type,
+      title: vista.title,
+      message: vista.message,
+      data: vista.data,
       referencias,
       formato,
     };
@@ -205,7 +248,15 @@ async function conversarConAgente(sessionId, message, context = {}) {
 
   const answer = extraerTexto(firstResponse) || 'No pude generar una respuesta.';
   rememberChat(sessionId, 'assistant', answer);
-  return { answer, referencias: [], formato: normalizarFormato(userMessage) };
+  return {
+    answer,
+    type: 'text',
+    title: 'Asistente',
+    message: answer,
+    data: [],
+    referencias: [],
+    formato: normalizarFormato(userMessage),
+  };
 }
 
 module.exports = { conversarConAgente, buscarFacturas, facturaPublica };

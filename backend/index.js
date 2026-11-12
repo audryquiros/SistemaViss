@@ -24,6 +24,48 @@ const upload = multer({
   },
 });
 
+async function backfillFingerprintsFacturas() {
+  const { Factura, FacturaItem } = require('./models');
+  const { construirFingerprint } = require('./services/agentServiceFacturas');
+
+  const pendientes = await Factura.findAll({
+    where: { fingerprint: null },
+    include: [{ model: FacturaItem, as: 'items' }],
+    order: [['id', 'ASC']],
+  });
+
+  if (!pendientes.length) return;
+
+  let actualizadas = 0;
+  for (const factura of pendientes) {
+    const row = factura.toJSON();
+    const normalizada = {
+      numero_factura: row.numero_factura,
+      fecha_emision: row.fecha_emision,
+      moneda: row.moneda,
+      emisor: { nombre: row.emisor_nombre, nif_rfc: row.emisor_nif_rfc, direccion: row.emisor_direccion },
+      receptor: { nombre: row.receptor_nombre, nif_rfc: row.receptor_nif_rfc },
+      subtotal: row.subtotal,
+      impuestos: row.impuestos,
+      total: row.total,
+      items: row.items || [],
+    };
+    const fingerprint = construirFingerprint(normalizada);
+
+    try {
+      await factura.update({ fingerprint });
+      actualizadas += 1;
+    } catch (error) {
+      // Si ya existe otro registro con exactamente el mismo contenido,
+      // dejamos este registro histórico sin fingerprint. La comprobación
+      // por contenido durante el guardado seguirá detectando el duplicado.
+      if (error?.name !== 'SequelizeUniqueConstraintError') throw error;
+    }
+  }
+
+  if (actualizadas) console.log(`Fingerprints sincronizados: ${actualizadas} factura(s) existentes.`);
+}
+
 async function asegurarEsquemaFacturas() {
   const database = sequelize.getDatabaseName();
   const [columnas] = await sequelize.query(`
@@ -162,6 +204,7 @@ async function iniciarServidor() {
     await sequelize.authenticate();
     await asegurarEsquemaFacturas();
     await sequelize.sync();
+    await backfillFingerprintsFacturas();
     console.log('Base de datos MySQL conectada y tablas sincronizadas.');
   } catch (error) {
     console.error('No se pudo conectar/sincronizar MySQL:', error.message);
